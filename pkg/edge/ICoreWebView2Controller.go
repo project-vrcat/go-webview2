@@ -1,9 +1,10 @@
 package edge
 
 import (
-	"github.com/jchv/go-webview2/internal/w32"
-	"golang.org/x/sys/windows"
 	"unsafe"
+
+	"github.com/project-vrcat/go-webview2/internal/w32"
+	"golang.org/x/sys/windows"
 )
 
 type _ICoreWebView2ControllerVtbl struct {

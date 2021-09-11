@@ -4,13 +4,14 @@
 package edge
 
 import (
-	"github.com/jchv/go-webview2/internal/w32"
-	"golang.org/x/sys/windows"
 	"log"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/project-vrcat/go-webview2/internal/w32"
+	"golang.org/x/sys/windows"
 )
 
 type Chromium struct {
@@ -51,16 +52,26 @@ func NewChromium() *Chromium {
 	return e
 }
 
-func (e *Chromium) Embed(hwnd uintptr) bool {
+func (e *Chromium) Embed(hwnd uintptr, userDataFolder ...string) bool {
 	e.hwnd = hwnd
-	currentExePath := make([]uint16, windows.MAX_PATH)
-	_, err := windows.GetModuleFileName(windows.Handle(0), &currentExePath[0], windows.MAX_PATH)
-	if err != nil {
-		// What to do here?
-		return false
+	var dataPath string
+	if len(userDataFolder) > 0 {
+		var err error
+		dataPath, err = filepath.Abs(userDataFolder[0])
+		if err != nil {
+			log.Printf("Error UserData Folder: %v", err)
+			return false
+		}
+	} else {
+		currentExePath := make([]uint16, windows.MAX_PATH)
+		_, err := windows.GetModuleFileName(windows.Handle(0), &currentExePath[0], windows.MAX_PATH)
+		if err != nil {
+			// What to do here?
+			return false
+		}
+		currentExeName := filepath.Base(windows.UTF16ToString(currentExePath))
+		dataPath = filepath.Join(os.Getenv("AppData"), currentExeName)
 	}
-	currentExeName := filepath.Base(windows.UTF16ToString(currentExePath))
-	dataPath := filepath.Join(os.Getenv("AppData"), currentExeName)
 	res, err := createCoreWebView2EnvironmentWithOptions(nil, windows.StringToUTF16Ptr(dataPath), 0, e.envCompleted)
 	if err != nil {
 		log.Printf("Error calling Webview2Loader: %v", err)

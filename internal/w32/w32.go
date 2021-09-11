@@ -1,10 +1,11 @@
 package w32
 
 import (
-	"golang.org/x/sys/windows"
 	"syscall"
 	"unicode/utf16"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 var (
@@ -38,11 +39,18 @@ var (
 	User32SetWindowLongPtrW  = user32.NewProc("SetWindowLongPtrW")
 	User32AdjustWindowRect   = user32.NewProc("AdjustWindowRect")
 	User32SetWindowPos       = user32.NewProc("SetWindowPos")
+	User32MoveWindow         = user32.NewProc("MoveWindow")
+	User32GetWindowRect      = user32.NewProc("GetWindowRect")
+
+	shell32           = windows.NewLazySystemDLL("shell32")
+	User32ExtractIcon = shell32.NewProc("ExtractIconW")
 )
 
 const (
-	SystemMetricsCxIcon = 11
-	SystemMetricsCyIcon = 12
+	SystemMetricsCxScreen = 0
+	SystemMetricsCyScreen = 1
+	SystemMetricsCxIcon   = 11
+	SystemMetricsCyIcon   = 12
 )
 
 const (
@@ -148,4 +156,14 @@ func SHCreateMemStream(data []byte) (uintptr, error) {
 	}
 
 	return ret, nil
+}
+
+func ExtractIcon(exeFileName string, iconIndex int32) uintptr {
+	e, _ := syscall.UTF16PtrFromString(exeFileName)
+	ret, _, _ := User32ExtractIcon.Call(
+		uintptr(0),
+		uintptr(unsafe.Pointer(e)),
+		uintptr(iconIndex),
+	)
+	return ret
 }

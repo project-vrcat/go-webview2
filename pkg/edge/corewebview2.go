@@ -1,15 +1,17 @@
+//go:build windows
 // +build windows
 
 package edge
 
 import (
-	"github.com/jchv/go-webview2/internal/w32"
 	"log"
 	"runtime"
 	"syscall"
 	"unsafe"
 
-	"github.com/jchv/go-webview2/webviewloader"
+	"github.com/project-vrcat/go-webview2/internal/w32"
+
+	"github.com/project-vrcat/go-webview2/webviewloader"
 	"golang.org/x/sys/windows"
 )
 

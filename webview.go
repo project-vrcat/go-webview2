@@ -6,13 +6,16 @@ package webview2
 import (
 	"encoding/json"
 	"errors"
-	"github.com/jchv/go-webview2/internal/w32"
-	"github.com/jchv/go-webview2/pkg/edge"
 	"log"
+	"os"
 	"reflect"
 	"strconv"
 	"sync"
+	"syscall"
 	"unsafe"
+
+	"github.com/project-vrcat/go-webview2/internal/w32"
+	"github.com/project-vrcat/go-webview2/pkg/edge"
 
 	"golang.org/x/sys/windows"
 )
@@ -42,10 +45,10 @@ type browser interface {
 	Eval(script string)
 }
 
-type webview struct {
-	hwnd       uintptr
+type WebView struct {
+	HWND       uintptr
 	mainthread uintptr
-	browser    browser
+	Browser    *edge.Chromium
 	maxsz      w32.Point
 	minsz      w32.Point
 	m          sync.Mutex
@@ -54,20 +57,22 @@ type webview struct {
 }
 
 // New creates a new webview in a new window.
-func New(debug bool) WebView { return NewWindow(debug, nil) }
+func New(debug bool, userDataFolder ...string) *WebView {
+	return NewWindow(debug, nil, userDataFolder...)
+}
 
 // NewWindow creates a new webview using an existing window.
-func NewWindow(debug bool, window unsafe.Pointer) WebView {
-	w := &webview{}
+func NewWindow(debug bool, window unsafe.Pointer, userDataFolder ...string) *WebView {
+	w := &WebView{}
 	w.bindings = map[string]interface{}{}
 
 	chromium := edge.NewChromium()
 	chromium.MessageCallback = w.msgcb
 	chromium.Debug = debug
 
-	w.browser = chromium
+	w.Browser = chromium
 	w.mainthread, _, _ = w32.Kernel32GetCurrentThreadID.Call()
-	if !w.Create(debug, window) {
+	if !w.Create(debug, window, userDataFolder...) {
 		return nil
 	}
 	return w
@@ -81,7 +86,7 @@ type rpcMessage struct {
 
 func jsString(v interface{}) string { b, _ := json.Marshal(v); return string(b) }
 
-func (w *webview) msgcb(msg string) {
+func (w *WebView) msgcb(msg string) {
 	d := rpcMessage{}
 	if err := json.Unmarshal([]byte(msg), &d); err != nil {
 		log.Printf("invalid RPC message: %v", err)
@@ -104,7 +109,7 @@ func (w *webview) msgcb(msg string) {
 	}
 }
 
-func (w *webview) callbinding(d rpcMessage) (interface{}, error) {
+func (w *WebView) callbinding(d rpcMessage) (interface{}, error) {
 	w.m.Lock()
 	f, ok := w.bindings[d.Method]
 	w.m.Unlock()
@@ -165,10 +170,10 @@ func (w *webview) callbinding(d rpcMessage) (interface{}, error) {
 }
 
 func wndproc(hwnd, msg, wp, lp uintptr) uintptr {
-	if w, ok := getWindowContext(hwnd).(*webview); ok {
+	if w, ok := getWindowContext(hwnd).(*WebView); ok {
 		switch msg {
 		case w32.WMSize:
-			w.browser.Resize()
+			w.Browser.Resize()
 		case w32.WMClose:
 			w32.User32DestroyWindow.Call(hwnd)
 		case w32.WMDestroy:
@@ -192,14 +197,11 @@ func wndproc(hwnd, msg, wp, lp uintptr) uintptr {
 	return r
 }
 
-func (w *webview) Create(debug bool, window unsafe.Pointer) bool {
+func (w *WebView) Create(debug bool, window unsafe.Pointer, userDataFolder ...string) bool {
 	var hinstance windows.Handle
 	windows.GetModuleHandleEx(0, nil, &hinstance)
 
-	icow, _, _ := w32.User32GetSystemMetrics.Call(w32.SystemMetricsCxIcon)
-	icoh, _, _ := w32.User32GetSystemMetrics.Call(w32.SystemMetricsCyIcon)
-
-	icon, _, _ := w32.User32LoadImageW.Call(uintptr(hinstance), 32512, icow, icoh, 0)
+	icon := w32.ExtractIcon(os.Args[0], 0)
 
 	className, _ := windows.UTF16PtrFromString("webview")
 	wc := w32.WndClassExW{
@@ -213,7 +215,7 @@ func (w *webview) Create(debug bool, window unsafe.Pointer) bool {
 	w32.User32RegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
 
 	windowName, _ := windows.UTF16PtrFromString("")
-	w.hwnd, _, _ = w32.User32CreateWindowExW.Call(
+	w.HWND, _, _ = w32.User32CreateWindowExW.Call(
 		0,
 		uintptr(unsafe.Pointer(className)),
 		uintptr(unsafe.Pointer(windowName)),
@@ -227,23 +229,23 @@ func (w *webview) Create(debug bool, window unsafe.Pointer) bool {
 		uintptr(hinstance),
 		0,
 	)
-	setWindowContext(w.hwnd, w)
+	setWindowContext(w.HWND, w)
 
-	w32.User32ShowWindow.Call(w.hwnd, w32.SWShow)
-	w32.User32UpdateWindow.Call(w.hwnd)
-	w32.User32SetFocus.Call(w.hwnd)
+	w32.User32ShowWindow.Call(w.HWND, w32.SWShow)
+	w32.User32UpdateWindow.Call(w.HWND)
+	w32.User32SetFocus.Call(w.HWND)
 
-	if !w.browser.Embed(w.hwnd) {
+	if !w.Browser.Embed(w.HWND, userDataFolder...) {
 		return false
 	}
-	w.browser.Resize()
+	w.Browser.Resize()
 	return true
 }
 
-func (w *webview) Destroy() {
+func (w *WebView) Destroy() {
 }
 
-func (w *webview) Run() {
+func (w *WebView) Run() {
 	var msg w32.Msg
 	for {
 		w32.User32GetMessageW.Call(
@@ -268,35 +270,35 @@ func (w *webview) Run() {
 	}
 }
 
-func (w *webview) Terminate() {
+func (w *WebView) Terminate() {
 	w32.User32PostQuitMessage.Call(0)
 }
 
-func (w *webview) Window() unsafe.Pointer {
-	return unsafe.Pointer(w.hwnd)
+func (w *WebView) Window() unsafe.Pointer {
+	return unsafe.Pointer(w.HWND)
 }
 
-func (w *webview) Navigate(url string) {
-	w.browser.Navigate(url)
+func (w *WebView) Navigate(url string) {
+	w.Browser.Navigate(url)
 }
 
-func (w *webview) SetTitle(title string) {
+func (w *WebView) SetTitle(title string) {
 	_title, err := windows.UTF16FromString(title)
 	if err != nil {
 		_title, _ = windows.UTF16FromString("")
 	}
-	w32.User32SetWindowTextW.Call(w.hwnd, uintptr(unsafe.Pointer(&_title[0])))
+	w32.User32SetWindowTextW.Call(w.HWND, uintptr(unsafe.Pointer(&_title[0])))
 }
 
-func (w *webview) SetSize(width int, height int, hints Hint) {
+func (w *WebView) SetSize(width int, height int, hints Hint) {
 	index := w32.GWLStyle
-	style, _, _ := w32.User32GetWindowLongPtrW.Call(w.hwnd, uintptr(index))
+	style, _, _ := w32.User32GetWindowLongPtrW.Call(w.HWND, uintptr(index))
 	if hints == HintFixed {
 		style &^= (w32.WSThickFrame | w32.WSMaximizeBox)
 	} else {
 		style |= (w32.WSThickFrame | w32.WSMaximizeBox)
 	}
-	w32.User32SetWindowLongPtrW.Call(w.hwnd, uintptr(index), style)
+	w32.User32SetWindowLongPtrW.Call(w.HWND, uintptr(index), style)
 
 	if hints == HintMax {
 		w.maxsz.X = int32(width)
@@ -304,6 +306,24 @@ func (w *webview) SetSize(width int, height int, hints Hint) {
 	} else if hints == HintMin {
 		w.minsz.X = int32(width)
 		w.minsz.Y = int32(height)
+	} else if hints == HintCenter {
+		scrWidth, _, _ := w32.User32GetSystemMetrics.Call(w32.SystemMetricsCxScreen)
+		scrHeight, _, _ := w32.User32GetSystemMetrics.Call(w32.SystemMetricsCyScreen)
+		rect := new(w32.Rect)
+		ret, _, _ := syscall.Syscall(w32.User32GetWindowRect.Addr(), 2,
+			w.HWND,
+			uintptr(unsafe.Pointer(rect)),
+			0)
+		if ret == 0 {
+			return
+		}
+		rect.Left = int32((int(scrWidth) - width) / 2)
+		rect.Top = int32((int(scrHeight) - height) / 2)
+		_, _, _ = w32.User32MoveWindow.Call(w.HWND,
+			uintptr(rect.Left), uintptr(rect.Top),
+			uintptr(width), uintptr(height),
+			1)
+		w.Browser.Resize()
 	} else {
 		r := w32.Rect{}
 		r.Left = 0
@@ -312,28 +332,28 @@ func (w *webview) SetSize(width int, height int, hints Hint) {
 		r.Bottom = int32(height)
 		w32.User32AdjustWindowRect.Call(uintptr(unsafe.Pointer(&r)), w32.WSOverlappedWindow, 0)
 		w32.User32SetWindowPos.Call(
-			w.hwnd, 0, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right-r.Left), uintptr(r.Bottom-r.Top),
+			w.HWND, 0, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right-r.Left), uintptr(r.Bottom-r.Top),
 			w32.SWPNoZOrder|w32.SWPNoActivate|w32.SWPNoMove|w32.SWPFrameChanged)
-		w.browser.Resize()
+		w.Browser.Resize()
 	}
 }
 
-func (w *webview) Init(js string) {
-	w.browser.Init(js)
+func (w *WebView) Init(js string) {
+	w.Browser.Init(js)
 }
 
-func (w *webview) Eval(js string) {
-	w.browser.Eval(js)
+func (w *WebView) Eval(js string) {
+	w.Browser.Eval(js)
 }
 
-func (w *webview) Dispatch(f func()) {
+func (w *WebView) Dispatch(f func()) {
 	w.m.Lock()
 	w.dispatchq = append(w.dispatchq, f)
 	w.m.Unlock()
 	w32.User32PostThreadMessageW.Call(w.mainthread, w32.WMApp, 0, 0)
 }
 
-func (w *webview) Bind(name string, f interface{}) error {
+func (w *WebView) Bind(name string, f interface{}) error {
 	v := reflect.ValueOf(f)
 	if v.Kind() != reflect.Func {
 		return errors.New("only functions can be bound")
